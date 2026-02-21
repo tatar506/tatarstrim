@@ -7,56 +7,87 @@
     <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
     <script src="https://unpkg.com/peerjs@1.5.1/dist/peerjs.min.js"></script>
     <style>
-        body { background-color: #0b0f1a; color: white; }
-        .active-border { border: 2px solid #6366f1; box-shadow: 0 0 15px #6366f1; }
-        video { width: 100%; border-radius: 12px; background: #000; }
+        body { background: #050811; color: #e2e8f0; font-family: 'Inter', sans-serif; }
+        .glass { background: rgba(30, 41, 59, 0.7); backdrop-filter: blur(12px); border: 1px solid rgba(255,255,255,0.1); }
+        .alert-anim { animation: slideIn 0.5s ease-out, fadeOut 0.5s 4s forwards; }
+        @keyframes slideIn { from { transform: translate(-50%, -100%); } to { transform: translate(-50%, 0); } }
+        @keyframes fadeOut { to { opacity: 0; visibility: hidden; } }
     </style>
 </head>
-<body class="p-4">
-    <div id="auth-screen" class="max-w-md mx-auto mt-20 bg-slate-800 p-8 rounded-2xl shadow-2xl border border-slate-700">
-        <h1 class="text-4xl font-black mb-6 text-center text-indigo-500">TATAR STRIM</h1>
-        <input id="username-input" type="text" placeholder="Ваш ник" class="w-full p-3 mb-4 rounded-xl bg-slate-700 border border-slate-600 outline-none text-white">
-        <button onclick="registerUser()" class="w-full bg-indigo-600 hover:bg-indigo-700 p-3 rounded-xl font-bold shadow-lg transition-all">Войти</button>
+<body class="min-h-screen">
+    <!-- Оверлей уведомлений -->
+    <div id="alert-box" class="hidden fixed top-10 left-1/2 -translate-x-1/2 z-[100] alert-anim bg-gradient-to-r from-purple-600 to-blue-600 p-6 rounded-2xl shadow-2xl text-center min-w-[300px]">
+        <h2 id="alert-title" class="text-2xl font-black italic">ДОНАТ!</h2>
+        <p id="alert-body" class="text-lg font-bold"></p>
     </div>
 
-    <div id="main-screen" class="hidden">
-        <header class="flex justify-between items-center mb-8 border-b border-slate-800 pb-4">
-            <h1 class="text-3xl font-black text-indigo-500 italic">TATARSTRIM</h1>
-            <div class="flex gap-4">
-                <button onclick="askPassword()" class="bg-red-600 hover:bg-red-700 px-6 py-2 rounded-full font-bold transition">Начать свой стрим</button>
+    <!-- Экран Входа/Регистрации -->
+    <div id="auth-screen" class="fixed inset-0 flex items-center justify-center bg-black/80 z-[90]">
+        <div class="glass p-8 rounded-3xl w-full max-w-md">
+            <h1 class="text-3xl font-black text-center text-indigo-500 mb-6">TATAR STRIM</h1>
+            <div id="auth-form" class="space-y-4">
+                <input id="acc-user" type="text" placeholder="Никнейм" class="w-full p-3 rounded-xl bg-slate-900 border border-slate-700 outline-none">
+                <input id="acc-pass" type="password" placeholder="Пароль" class="w-full p-3 rounded-xl bg-slate-900 border border-slate-700 outline-none">
+                <p id="pass-hint" class="text-xs text-slate-500">Пароль: 8+ символов, цифра и спецсимвол.</p>
+                <div class="flex gap-2">
+                    <button onclick="handleAuth('login')" class="flex-1 bg-slate-700 p-3 rounded-xl font-bold hover:bg-slate-600 transition">Войти</button>
+                    <button onclick="handleAuth('register')" class="flex-1 bg-indigo-600 p-3 rounded-xl font-bold hover:bg-indigo-500 transition">Создать аккаунт</button>
+                </div>
+                <p id="auth-msg" class="text-red-400 text-center text-sm"></p>
+            </div>
+        </div>
+    </div>
+
+    <!-- Основной сайт -->
+    <div id="main-screen" class="hidden p-4 lg:p-8">
+        <header class="flex flex-wrap justify-between items-center mb-8 gap-4">
+            <h1 class="text-2xl font-black tracking-tighter text-indigo-500">TATARSTRIM</h1>
+            <input id="search-input" oninput="filterStreams()" type="text" placeholder="Поиск стримеров..." class="bg-slate-800 px-4 py-2 rounded-full w-full max-w-xs border border-slate-700 outline-none focus:border-indigo-500">
+            <div class="flex items-center gap-4">
+                <span id="my-nick" class="font-bold text-indigo-300"></span>
+                <button onclick="askPassword()" class="bg-red-600 hover:bg-red-700 px-6 py-2 rounded-full font-bold transition shadow-lg shadow-red-900/20">Go Live</button>
             </div>
         </header>
 
         <div class="grid grid-cols-1 lg:grid-cols-4 gap-6">
-            <!-- Левая колонка: Список стримов -->
-            <div class="bg-slate-900 p-4 rounded-2xl border border-slate-800">
-                <h2 class="font-bold text-indigo-400 mb-4 uppercase text-sm tracking-widest">Сейчас в эфире</h2>
-                <div id="stream-list" class="space-y-3">
-                    <p class="text-slate-500 text-sm italic">Активных стримов нет...</p>
-                </div>
+            <!-- Список стримов -->
+            <div class="lg:col-span-1 glass rounded-3xl p-4 h-fit">
+                <h3 class="text-slate-400 uppercase text-xs font-bold mb-4 tracking-widest">Активные каналы</h3>
+                <div id="stream-list" class="space-y-2"></div>
             </div>
 
-            <!-- Центр: Плеер -->
-            <div class="lg:col-span-2 relative">
-                <div id="donation-box" class="hidden absolute top-10 left-1/2 -translate-x-1/2 z-50 bg-yellow-400 p-4 rounded-xl text-black font-black text-center shadow-2xl border-4 border-white animate-bounce">
-                    <div id="donation-text"></div>
+            <!-- Плеер -->
+            <div class="lg:col-span-2 space-y-4">
+                <div class="relative aspect-video bg-black rounded-3xl overflow-hidden border border-slate-800 shadow-2xl">
+                    <video id="main-video" class="w-full h-full object-contain" autoplay playsinline controls></video>
                 </div>
-                <video id="remote-video" autoplay playsinline controls></video>
-                <div class="mt-4 p-4 bg-slate-800 rounded-xl flex justify-between items-center">
+                <div class="glass p-6 rounded-3xl flex justify-between items-center">
                     <div>
-                        <h2 id="stream-title" class="text-xl font-bold italic">Выберите стрим из списка слева</h2>
-                        <p class="text-slate-400 text-sm">Звук может быть выключен по умолчанию (нажмите на плеер)</p>
+                        <h2 id="current-stream-name" class="text-2xl font-bold">Выберите стрим</h2>
+                        <div class="flex gap-2 mt-2">
+                            <button onclick="sendFakeAction('sub')" class="text-xs bg-indigo-600/20 text-indigo-400 px-3 py-1 rounded-full border border-indigo-600/30">Подписаться</button>
+                            <button onclick="sendFakeAction('donate')" class="text-xs bg-yellow-600/20 text-yellow-400 px-3 py-1 rounded-full border border-yellow-600/30">Задонатить</button>
+                        </div>
+                    </div>
+                    <!-- Настройки -->
+                    <div class="text-right">
+                        <p class="text-xs text-slate-500 mb-1">Качество</p>
+                        <select id="quality" class="bg-slate-800 rounded-lg text-xs p-1 outline-none">
+                            <option value="high">1080p (High)</option>
+                            <option value="low">480p (Low Delay)</option>
+                        </select>
                     </div>
                 </div>
             </div>
 
-            <!-- Правая колонка: Чат -->
-            <div class="bg-slate-900 p-4 rounded-2xl border border-slate-800 flex flex-col h-[500px]">
-                <h3 class="font-bold text-center border-b border-slate-800 pb-2 mb-4">ЧАТ</h3>
-                <div id="chat" class="flex-grow overflow-y-auto space-y-2 mb-4 text-sm"></div>
-                <div class="flex gap-2">
-                    <input id="chat-input" type="text" placeholder="Сообщение..." class="w-full bg-slate-800 p-2 rounded-lg outline-none">
-                    <button onclick="sendMessage()" class="bg-indigo-600 px-4 rounded-lg font-bold">></button>
+            <!-- Чат -->
+            <div class="lg:col-span-1 glass rounded-3xl p-4 flex flex-col h-[600px]">
+                <div id="chat" class="flex-grow overflow-y-auto space-y-3 mb-4 pr-2"></div>
+                <div class="relative">
+                    <input id="chat-msg" type="text" placeholder="Сообщение..." class="w-full bg-slate-900 p-3 rounded-2xl outline-none border border-slate-700 focus:border-indigo-500 pr-12">
+                    <button onclick="sendMsg()" class="absolute right-2 top-2 bg-indigo-600 p-1.5 rounded-xl hover:bg-indigo-500">
+                        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8"/></svg>
+                    </button>
                 </div>
             </div>
         </div>
