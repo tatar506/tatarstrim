@@ -3,7 +3,7 @@ const app = express();
 const http = require('http').createServer(app);
 const io = require('socket.io')(http, {
     cors: {
-        origin: "*", // Позволяет подключаться с любого адреса
+        origin: "*", // Разрешаем подключения со всех адресов (важно для GitHub/Render)
         methods: ["GET", "POST"]
     }
 });
@@ -11,37 +11,29 @@ const { ExpressPeerServer } = require('peer');
 
 const PORT = process.env.PORT || 3000;
 
-// Твой секретный пароль для запуска стрима
+// Твой секретный пароль для стримеров
 const STREAMER_PASSWORD = "tatar_super_pass"; 
 
-// Переменная для хранения ID текущего стримера
-let currentStreamerPeerId = null;
+// Список активных трансляций
+let activeStreamers = [];
 
-// Настройка папки со статикой (твой фронтенд)
 app.use(express.static('public'));
 
-// Настройка PeerJS сервера (для видеосвязи)
+// Настройка PeerJS (сервер для видео-сигналов)
 const peerServer = ExpressPeerServer(http, {
     debug: true,
     path: '/'
 });
 app.use('/peerjs', peerServer);
 
-// Логика Socket.io
+// Работа с сокетами (чат, уведомления, список стримов)
 io.on('connection', (socket) => {
-    console.log('Новое подключение:', socket.id);
+    console.log('Пользователь подключился:', socket.id);
 
-    // Если стрим уже идет, сразу сообщаем новому пользователю ID стримера
-    if (currentStreamerPeerId) {
-        socket.emit('stream-available', currentStreamerPeerId);
-    }
+    // При входе отправляем пользователю список тех, кто уже стримит
+    socket.emit('update-stream-list', activeStreamers);
 
-    // Регистрация пользователя (ник)
-    socket.on('register', (data) => {
-        console.log(`Пользователь ${data.username} вошел в сеть`);
-    });
-
-    // Проверка пароля стримера
+    // Проверка пароля для начала стрима
     socket.on('start-stream-request', (pass) => {
         if (pass === STREAMER_PASSWORD) {
             socket.emit('stream-auth-success');
@@ -50,35 +42,53 @@ io.on('connection', (socket) => {
         }
     });
 
-    // Когда стример начал трансляцию, сохраняем его Peer ID и рассылаем всем
+    // Когда кто-то успешно запустил стрим
     socket.on('stream-started', (data) => {
-        currentStreamerPeerId = data.peerId;
-        // Отправляем всем, кроме самого стримера
-        socket.broadcast.emit('stream-available', data.peerId);
-        console.log('Стрим запущен стримером с PeerID:', data.peerId);
+        // Проверяем, нет ли его уже в списке (чтобы не дублировать)
+        activeStreamers = activeStreamers.filter(s => s.socketId !== socket.id);
+        
+        // Добавляем стримера: его PeerID (для видео) и Nickname (для красоты)
+        activeStreamers.push({
+            peerId: data.peerId,
+            user: data.user,
+            socketId: socket.id
+        });
+
+        console.log(`Стрим запущен пользователем: ${data.user}`);
+        // Рассылаем всем обновленный список стримов
+        io.emit('update-stream-list', activeStreamers);
     });
 
     // Чат сообщения
     socket.on('chat-message', (data) => {
-        io.emit('chat-message', data); // Рассылаем всем
+        io.emit('chat-message', data);
     });
 
     // Донаты
     socket.on('send-donation', (data) => {
-        io.emit('new-donation', data); // Рассылаем всем
+        io.emit('new-donation', data);
     });
 
-    // Когда кто-то отключается
+    // Обработка отключения
     socket.on('disconnect', () => {
-        // Если отключился стример, обнуляем ID
-        // (Для упрощения: если сокет стримера закрыт, ID можно сбросить)
-        console.log('Пользователь ушел:', socket.id);
+        const index = activeStreamers.findIndex(s => s.socketId === socket.id);
+        if (index !== -1) {
+            console.log(`Стример ${activeStreamers[index].user} отключился`);
+            activeStreamers.splice(index, 1);
+            // Уведомляем всех, что стрим закончился
+            io.emit('update-stream-list', activeStreamers);
+        }
+        console.log('Пользователь ушел');
     });
 });
 
 // Запуск сервера
 http.listen(PORT, () => {
-    console.log(`=== TATARSTRIM ЗАПУЩЕН ===`);
-    console.log(`Порт: ${PORT}`);
-    console.log(`Пароль для стрима: ${STREAMER_PASSWORD}`);
+    console.log(`
+    ======================================
+    Платформа TATARSTRIM запущена!
+    Порт: ${PORT}
+    Пароль для стрима: ${STREAMER_PASSWORD}
+    ======================================
+    `);
 });
