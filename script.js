@@ -1,22 +1,20 @@
-const socket = io("https://tatarstrim.onrender.com");
+// ПРИНУДИТЕЛЬНО ИСПОЛЬЗУЕМ WEBSOCKETS (это уберет ошибки 400/502/CORS)
+const socket = io("https://tatarstrim.onrender.com", {
+    transports: ['websocket'] 
+});
+
 let myPeer, currentNick, myStream, allStreams = [];
 
-// Проверка сложности пароля
-function isStrongPassword(p) {
-    return p.length >= 8 && /\d/.test(p) && /[!@#$%^&*]/.test(p);
-}
-
+// Авторизация БЕЗ проверки сложности
 window.handleAuth = (type) => {
     const user = document.getElementById('acc-user').value.trim();
     const pass = document.getElementById('acc-pass').value.trim();
-    const msg = document.getElementById('auth-msg');
+    if (!user || !pass) return alert("Введите данные");
 
-    if (!user || !pass) return msg.innerText = "Заполните все поля!";
-    if (type === 'register' && !isStrongPassword(pass)) {
-        return msg.innerText = "Слишком простой пароль!";
-    }
-
-    socket.emit(type === 'login' ? 'login-account' : 'register-account', { username: user, password: pass });
+    socket.emit(type === 'login' ? 'login-account' : 'register-account', { 
+        username: user, 
+        password: pass 
+    });
 };
 
 socket.on('auth-success', (data) => {
@@ -27,33 +25,47 @@ socket.on('auth-success', (data) => {
     initPeer();
 });
 
-socket.on('auth-error', (e) => document.getElementById('auth-msg').innerText = e);
+socket.on('auth-error', (e) => alert(e));
 
 function initPeer() {
-    myPeer = new Peer(undefined, { host: 'tatarstrim.onrender.com', port: 443, path: '/peerjs', secure: true });
-    myPeer.on('call', call => call.answer(myStream));
+    myPeer = new Peer(undefined, { 
+        host: 'tatarstrim.onrender.com', 
+        port: 443, 
+        path: '/peerjs', 
+        secure: true 
+    });
+    myPeer.on('call', call => {
+        console.log("Отдаю поток зрителю...");
+        call.answer(myStream);
+    });
 }
 
-// Стрим
+// Запуск стрима
 window.askPassword = () => {
-    const p = prompt("Введите мастер-пароль для стриминга:");
+    const p = prompt("Пароль стримера:");
     socket.emit('start-stream-request', p);
 };
 
 socket.on('stream-auth-ok', async () => {
     try {
         const quality = document.getElementById('quality').value;
-        const constraints = quality === 'high' ? { video: { width: 1920, height: 1080 } } : { video: { width: 854, height: 480 } };
+        const constraints = quality === 'high' ? 
+            { video: { width: 1280, height: 720 }, audio: true } : 
+            { video: { width: 640, height: 360 }, audio: true };
         
-        myStream = await navigator.mediaDevices.getDisplayMedia({ video: constraints, audio: true });
+        myStream = await navigator.mediaDevices.getDisplayMedia(constraints);
+        
         try {
             const mic = await navigator.mediaDevices.getUserMedia({ audio: true });
             mic.getAudioTracks().forEach(t => myStream.addTrack(t));
-        } catch(e) {}
+        } catch(e) { console.log("Микрофон не добавлен"); }
 
         document.getElementById('main-video').srcObject = myStream;
+        document.getElementById('main-video').muted = true;
+
         socket.emit('stream-started', { peerId: myPeer.id, user: currentNick });
-    } catch (e) { alert("Ошибка захвата: " + e); }
+        alert("Стрим запущен! Не забудьте выбрать 'Поделиться аудио'");
+    } catch (e) { alert("Ошибка: " + e); }
 });
 
 // Список и Поиск
@@ -65,29 +77,30 @@ socket.on('update-stream-list', (list) => {
 function renderStreams(list) {
     const container = document.getElementById('stream-list');
     container.innerHTML = list.map(s => `
-        <button onclick="joinStream('${s.peerId}', '${s.user}')" class="w-full text-left p-3 glass rounded-2xl hover:bg-indigo-600 transition group">
-            <div class="font-bold group-hover:text-white">${s.user}</div>
-            <div class="text-[10px] text-indigo-400 uppercase tracking-widest">Live Now</div>
+        <button onclick="joinStream('${s.peerId}', '${s.user}')" class="w-full text-left p-3 bg-slate-800 rounded-xl hover:bg-indigo-600 transition mb-2 border border-slate-700">
+            <div class="font-bold">${s.user}</div>
+            <div class="text-[10px] text-red-500 font-bold uppercase">В ЭФИРЕ</div>
         </button>
-    `).join('') || '<p class="text-slate-600 text-sm italic">Никто не стримит...</p>';
+    `).join('') || '<p class="text-slate-600 text-sm">Активных стримов нет</p>';
 }
 
 window.filterStreams = () => {
-    const query = document.getElementById('search-input').value.toLowerCase();
-    renderStreams(allStreams.filter(s => s.user.toLowerCase().includes(query)));
+    const q = document.getElementById('search-input').value.toLowerCase();
+    renderStreams(allStreams.filter(s => s.user.toLowerCase().includes(q)));
 };
 
 function joinStream(id, name) {
-    document.getElementById('current-stream-name').innerText = name;
+    document.getElementById('current-stream-name').innerText = "Смотрим: " + name;
+    console.log("Подключаюсь к ID:", id);
     const call = myPeer.call(id, null);
     call.on('stream', rs => {
         const v = document.getElementById('main-video');
         v.srcObject = rs;
-        v.play();
+        v.play().catch(e => console.log("Нажмите на видео для звука"));
     });
 }
 
-// Чат и Алерт
+// Чат
 window.sendMsg = () => {
     const i = document.getElementById('chat-msg');
     if (i.value) {
@@ -98,19 +111,24 @@ window.sendMsg = () => {
 
 socket.on('chat-message', d => {
     const chat = document.getElementById('chat');
-    chat.innerHTML += `<div><span class="text-indigo-400 font-bold">${d.user}:</span> <span class="text-slate-300">${d.text}</span></div>`;
+    chat.innerHTML += `<div><b class="text-indigo-400">${d.user}:</b> ${d.text}</div>`;
     chat.scrollTop = chat.scrollHeight;
 });
 
+// Донаты и Подписки
 window.sendFakeAction = (type) => {
-    if (type === 'donate') socket.emit('send-donation', { user: currentNick, amount: Math.floor(Math.random() * 1000) });
+    if (type === 'donate') socket.emit('send-donation', { user: currentNick, amount: 500 });
     else socket.emit('send-sub', { user: currentNick });
 };
 
 socket.on('alert', d => {
     const box = document.getElementById('alert-box');
+    const title = document.getElementById('alert-title');
+    const body = document.getElementById('alert-body');
+    
     box.classList.remove('hidden');
-    document.getElementById('alert-title').innerText = d.type === 'donation' ? 'НОВЫЙ ДОНАТ!' : 'НОВАЯ ПОДПИСКА!';
-    document.getElementById('alert-body').innerText = d.type === 'donation' ? `${d.user} прислал ${d.amount} руб.` : `${d.user} теперь с нами!`;
-    setTimeout(() => box.classList.add('hidden'), 4500);
+    title.innerText = d.type === 'donation' ? 'НОВЫЙ ДОНАТ!' : 'НОВАЯ ПОДПИСКА!';
+    body.innerText = d.type === 'donation' ? `${d.user}: ${d.amount} RUB` : `${d.user} ПОДПИСАЛСЯ!`;
+    
+    setTimeout(() => box.classList.add('hidden'), 4000);
 });
