@@ -3,92 +3,71 @@ const app = express();
 const http = require('http').createServer(app);
 const io = require('socket.io')(http, {
     cors: {
-        origin: "*", // Разрешаем подключения со всех адресов (важно для GitHub/Render)
-        methods: ["GET", "POST"]
+        origin: ["https://tatar506.github.io", "https://tatarstrim.onrender.com"],
+        methods: ["GET", "POST"],
+        credentials: true
     }
 });
 const { ExpressPeerServer } = require('peer');
 
 const PORT = process.env.PORT || 3000;
+const MASTER_STREAM_PASS = "tatar_super_pass"; // Пароль, чтобы стать стримером
 
-// Твой секретный пароль для стримеров
-const STREAMER_PASSWORD = "tatar_super_pass"; 
-
-// Список активных трансляций
+let users = []; // {username, password}
 let activeStreamers = [];
 
 app.use(express.static('public'));
 
-// Настройка PeerJS (сервер для видео-сигналов)
+// PeerServer с исправленным CORS
 const peerServer = ExpressPeerServer(http, {
     debug: true,
-    path: '/'
+    path: '/',
+    proxied: true
 });
 app.use('/peerjs', peerServer);
 
-// Работа с сокетами (чат, уведомления, список стримов)
 io.on('connection', (socket) => {
-    console.log('Пользователь подключился:', socket.id);
+    // Регистрация
+    socket.on('register-account', (data) => {
+        const { username, password } = data;
+        if (users.find(u => u.username === username)) {
+            return socket.emit('auth-error', 'Этот ник уже занят!');
+        }
+        users.push({ username, password });
+        socket.emit('auth-success', { username });
+    });
 
-    // При входе отправляем пользователю список тех, кто уже стримит
-    socket.emit('update-stream-list', activeStreamers);
-
-    // Проверка пароля для начала стрима
-    socket.on('start-stream-request', (pass) => {
-        if (pass === STREAMER_PASSWORD) {
-            socket.emit('stream-auth-success');
+    // Логин
+    socket.on('login-account', (data) => {
+        const user = users.find(u => u.username === data.username && u.password === data.password);
+        if (user) {
+            socket.emit('auth-success', { username: user.username });
         } else {
-            socket.emit('stream-auth-fail');
+            socket.emit('auth-error', 'Неверный ник или пароль!');
         }
     });
 
-    // Когда кто-то успешно запустил стрим
-    socket.on('stream-started', (data) => {
-        // Проверяем, нет ли его уже в списке (чтобы не дублировать)
-        activeStreamers = activeStreamers.filter(s => s.socketId !== socket.id);
-        
-        // Добавляем стримера: его PeerID (для видео) и Nickname (для красоты)
-        activeStreamers.push({
-            peerId: data.peerId,
-            user: data.user,
-            socketId: socket.id
-        });
+    socket.emit('update-stream-list', activeStreamers);
 
-        console.log(`Стрим запущен пользователем: ${data.user}`);
-        // Рассылаем всем обновленный список стримов
+    socket.on('start-stream-request', (pass) => {
+        if (pass === MASTER_STREAM_PASS) socket.emit('stream-auth-ok');
+        else socket.emit('stream-auth-fail');
+    });
+
+    socket.on('stream-started', (data) => {
+        activeStreamers.push({ ...data, socketId: socket.id });
         io.emit('update-stream-list', activeStreamers);
     });
 
-    // Чат сообщения
-    socket.on('chat-message', (data) => {
-        io.emit('chat-message', data);
-    });
+    socket.on('chat-message', (data) => io.emit('chat-message', data));
+    
+    socket.on('send-donation', (data) => io.emit('alert', { type: 'donation', ...data }));
+    socket.on('send-sub', (data) => io.emit('alert', { type: 'sub', ...data }));
 
-    // Донаты
-    socket.on('send-donation', (data) => {
-        io.emit('new-donation', data);
-    });
-
-    // Обработка отключения
     socket.on('disconnect', () => {
-        const index = activeStreamers.findIndex(s => s.socketId === socket.id);
-        if (index !== -1) {
-            console.log(`Стример ${activeStreamers[index].user} отключился`);
-            activeStreamers.splice(index, 1);
-            // Уведомляем всех, что стрим закончился
-            io.emit('update-stream-list', activeStreamers);
-        }
-        console.log('Пользователь ушел');
+        activeStreamers = activeStreamers.filter(s => s.socketId !== socket.id);
+        io.emit('update-stream-list', activeStreamers);
     });
 });
 
-// Запуск сервера
-http.listen(PORT, () => {
-    console.log(`
-    ======================================
-    Платформа TATARSTRIM запущена!
-    Порт: ${PORT}
-    Пароль для стрима: ${STREAMER_PASSWORD}
-    ======================================
-    `);
-});
+http.listen(PORT, () => console.log(`Server running on ${PORT}`));
