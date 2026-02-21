@@ -1,6 +1,9 @@
-let socket = io(); // Теперь io будет определен, так как мы добавили CDN
+// 1. Указываем адрес сервера явно, чтобы не было ошибок 404
+const socket = io("https://tatarstrim.onrender.com"); 
+
 let myPeer;
 let currentUsername = "";
+let myStream; // Здесь будет храниться поток видео
 
 function registerUser() {
     const input = document.getElementById('username-input');
@@ -14,12 +17,12 @@ function registerUser() {
     document.getElementById('auth-screen').classList.add('hidden');
     document.getElementById('main-screen').classList.remove('hidden');
 
-    // Инициализация PeerJS
+    // 2. Настройка PeerJS (видео-связь)
     myPeer = new Peer(undefined, {
-        host: location.hostname,
-        port: location.port || (location.protocol === 'https:' ? 443 : 80),
+        host: "tatarstrim.onrender.com", // Явно указываем хост
+        port: 443,
         path: '/peerjs',
-        secure: location.protocol === 'https:'
+        secure: true
     });
 
     myPeer.on('open', id => {
@@ -27,40 +30,58 @@ function registerUser() {
         socket.emit('register', { username: currentUsername, peerId: id });
     });
 
+    // Когда кто-то "звонит" нам (зритель подключается к стримеру)
     myPeer.on('call', call => {
-        call.answer();
-        call.on('stream', userVideoStream => {
-            document.getElementById('remote-video').srcObject = userVideoStream;
-        });
+        if (myStream) {
+            console.log("Отдаю поток зрителю...");
+            call.answer(myStream); // Отправляем наш видео-поток зрителю
+        }
     });
 }
 
+// ФУНКЦИЯ ДЛЯ СТРИМЕРА (ДЛЯ ТЕБЯ)
 async function startStreaming() {
     try {
-        const stream = await navigator.mediaDevices.getDisplayMedia({
-            video: true,
+        // Захват экрана и звука системы
+        myStream = await navigator.mediaDevices.getDisplayMedia({
+            video: { cursor: "always" },
             audio: true
         });
 
-        // Добавляем микрофон
+        // Добавляем микрофон к общему потоку
         try {
-            const audioStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-            audioStream.getAudioTracks().forEach(track => stream.addTrack(track));
-        } catch(e) { console.log("Микрофон не найден или запрещен"); }
+            const micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            micStream.getAudioTracks().forEach(track => myStream.addTrack(track));
+        } catch(e) { console.log("Микрофон не подключен"); }
 
-        document.getElementById('remote-video').srcObject = stream;
+        const videoElement = document.getElementById('remote-video');
+        videoElement.srcObject = myStream;
+        videoElement.muted = true; // Чтобы не слышать самого себя
+
+        // Оповещаем сервер, что стрим начался и передаем наш Peer ID
+        socket.emit('stream-started', { peerId: myPeer.id });
         
-        socket.emit('chat-message', { user: 'СИСТЕМА', text: 'Стрим начался! Нажмите на плеер, если нет звука.' });
+        socket.emit('chat-message', { user: 'СИСТЕМА', text: 'Трансляция началась!' });
 
-        // В этом MVP мы просто показываем видео локально. 
-        // Для полноценного вещания на всех нужно передавать ID стримера.
     } catch (err) {
-        alert("Ошибка доступа к экрану: " + err);
+        alert("Ошибка захвата экрана: " + err);
     }
 }
 
+// ЛОГИКА ДЛЯ ЗРИТЕЛЕЙ (ПОЛУЧЕНИЕ СТРИМА)
+socket.on('stream-available', (streamerPeerId) => {
+    if (myPeer && streamerPeerId !== myPeer.id) {
+        console.log("Подключаюсь к стримеру:", streamerPeerId);
+        const call = myPeer.call(streamerPeerId, null); // "Звоним" стримеру без своего видео
+        call.on('stream', userVideoStream => {
+            document.getElementById('remote-video').srcObject = userVideoStream;
+        });
+    }
+});
+
+// ПАРОЛЬ И ЧАТ
 function askPassword() {
-    const pass = prompt("Введите пароль для стриминга:");
+    const pass = prompt("Введите паро letter для стриминга:");
     socket.emit('start-stream-request', pass);
 }
 
@@ -88,7 +109,7 @@ function sendMessage() {
 
 socket.on('chat-message', data => {
     const chat = document.getElementById('chat');
-    chat.innerHTML += `<div class="bg-slate-700/50 p-2 rounded shadow-sm"><span class="text-indigo-400 font-bold">${data.user}:</span> <span class="text-slate-200">${data.text}</span></div>`;
+    chat.innerHTML += `<div class="bg-slate-700/50 p-2 rounded"><span class="text-indigo-400 font-bold">${data.user}:</span> <span class="text-slate-200">${data.text}</span></div>`;
     chat.scrollTop = chat.scrollHeight;
 });
 
