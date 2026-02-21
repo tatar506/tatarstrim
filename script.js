@@ -1,25 +1,27 @@
-// 1. Указываем адрес сервера явно, чтобы не было ошибок 404
-const socket = io("https://tatarstrim.onrender.com"); 
+// ПРИНУДИТЕЛЬНОЕ ПОДКЛЮЧЕНИЕ К RENDER
+const RENDER_URL = "https://tatarstrim.onrender.com";
+const socket = io(RENDER_URL);
 
 let myPeer;
 let currentUsername = "";
-let myStream; // Здесь будет храниться поток видео
+let myStream;
 
-function registerUser() {
+// Функция регистрации (теперь она точно будет видна браузеру)
+window.registerUser = function() {
     const input = document.getElementById('username-input');
     currentUsername = input.value.trim();
 
-    if (currentUsername === "") {
-        alert("Введите ник!");
+    if (!currentUsername) {
+        alert("Пожалуйста, введите ник!");
         return;
     }
 
     document.getElementById('auth-screen').classList.add('hidden');
     document.getElementById('main-screen').classList.remove('hidden');
 
-    // 2. Настройка PeerJS (видео-связь)
+    // Настройка PeerJS для видео
     myPeer = new Peer(undefined, {
-        host: "tatarstrim.onrender.com", // Явно указываем хост
+        host: "tatarstrim.onrender.com",
         port: 443,
         path: '/peerjs',
         secure: true
@@ -30,60 +32,50 @@ function registerUser() {
         socket.emit('register', { username: currentUsername, peerId: id });
     });
 
-    // Когда кто-то "звонит" нам (зритель подключается к стримеру)
+    // Когда нам звонит зритель
     myPeer.on('call', call => {
         if (myStream) {
-            console.log("Отдаю поток зрителю...");
-            call.answer(myStream); // Отправляем наш видео-поток зрителю
+            call.answer(myStream);
         }
     });
-}
+};
 
-// ФУНКЦИЯ ДЛЯ СТРИМЕРА (ДЛЯ ТЕБЯ)
+// Функция старта стрима
 async function startStreaming() {
     try {
-        // Захват экрана и звука системы
         myStream = await navigator.mediaDevices.getDisplayMedia({
             video: { cursor: "always" },
             audio: true
         });
 
-        // Добавляем микрофон к общему потоку
-        try {
-            const micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-            micStream.getAudioTracks().forEach(track => myStream.addTrack(track));
-        } catch(e) { console.log("Микрофон не подключен"); }
-
         const videoElement = document.getElementById('remote-video');
         videoElement.srcObject = myStream;
-        videoElement.muted = true; // Чтобы не слышать самого себя
+        videoElement.muted = true;
 
-        // Оповещаем сервер, что стрим начался и передаем наш Peer ID
         socket.emit('stream-started', { peerId: myPeer.id });
-        
-        socket.emit('chat-message', { user: 'СИСТЕМА', text: 'Трансляция началась!' });
+        addChatMessage('СИСТЕМА', 'Трансляция запущена!');
 
     } catch (err) {
-        alert("Ошибка захвата экрана: " + err);
+        alert("Ошибка доступа: " + err);
     }
 }
 
-// ЛОГИКА ДЛЯ ЗРИТЕЛЕЙ (ПОЛУЧЕНИЕ СТРИМА)
+// Слушаем появление стримера (для зрителей)
 socket.on('stream-available', (streamerPeerId) => {
     if (myPeer && streamerPeerId !== myPeer.id) {
-        console.log("Подключаюсь к стримеру:", streamerPeerId);
-        const call = myPeer.call(streamerPeerId, null); // "Звоним" стримеру без своего видео
+        console.log("Стрим обнаружен, подключаюсь...");
+        const call = myPeer.call(streamerPeerId, null);
         call.on('stream', userVideoStream => {
             document.getElementById('remote-video').srcObject = userVideoStream;
         });
     }
 });
 
-// ПАРОЛЬ И ЧАТ
-function askPassword() {
-    const pass = prompt("Введите паро letter для стриминга:");
+// Работа с паролем
+window.askPassword = function() {
+    const pass = prompt("Введите пароль стримера:");
     socket.emit('start-stream-request', pass);
-}
+};
 
 socket.on('stream-auth-success', () => {
     startStreaming();
@@ -93,7 +85,8 @@ socket.on('stream-auth-fail', () => {
     alert("Неверный пароль!");
 });
 
-function sendMessage() {
+// Чат и донаты
+window.sendMessage = function() {
     const input = document.getElementById('chat-input');
     const msg = input.value.trim();
     if (!msg) return;
@@ -105,18 +98,23 @@ function sendMessage() {
         socket.emit('chat-message', { user: currentUsername, text: msg });
     }
     input.value = '';
-}
+};
 
 socket.on('chat-message', data => {
-    const chat = document.getElementById('chat');
-    chat.innerHTML += `<div class="bg-slate-700/50 p-2 rounded"><span class="text-indigo-400 font-bold">${data.user}:</span> <span class="text-slate-200">${data.text}</span></div>`;
-    chat.scrollTop = chat.scrollHeight;
+    addChatMessage(data.user, data.text);
 });
 
 socket.on('new-donation', data => {
     const box = document.getElementById('donation-box');
     const text = document.getElementById('donation-text');
-    text.innerText = `${data.user.toUpperCase()} задонатил ${data.amount} RUB!`;
+    text.innerText = `${data.user.toUpperCase()} — ${data.amount} РУБ.`;
     box.style.display = 'block';
     setTimeout(() => { box.style.display = 'none'; }, 5000);
 });
+
+function addChatMessage(user, text) {
+    const chat = document.getElementById('chat');
+    const color = user === currentUsername ? 'text-indigo-400' : 'text-slate-400';
+    chat.innerHTML += `<div><span class="${color} font-bold">${user}:</span> <span>${text}</span></div>`;
+    chat.scrollTop = chat.scrollHeight;
+}
