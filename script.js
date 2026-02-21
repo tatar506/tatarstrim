@@ -1,126 +1,116 @@
 const socket = io("https://tatarstrim.onrender.com");
-let myPeer;
-let currentUsername = "";
-let myStream;
+let myPeer, currentNick, myStream, allStreams = [];
 
-// Глобальная функция регистрации
-window.registerUser = function() {
-    const nick = document.getElementById('username-input').value.trim();
-    if (!nick) return alert("Введите ник");
-    currentUsername = nick;
-    document.getElementById('auth-screen').classList.add('hidden');
-    document.getElementById('main-screen').classList.remove('hidden');
+// Проверка сложности пароля
+function isStrongPassword(p) {
+    return p.length >= 8 && /\d/.test(p) && /[!@#$%^&*]/.test(p);
+}
 
-    myPeer = new Peer(undefined, {
-        host: "tatarstrim.onrender.com",
-        port: 443,
-        path: '/peerjs',
-        secure: true
-    });
+window.handleAuth = (type) => {
+    const user = document.getElementById('acc-user').value.trim();
+    const pass = document.getElementById('acc-pass').value.trim();
+    const msg = document.getElementById('auth-msg');
 
-    myPeer.on('open', id => {
-        socket.emit('register', { username: currentUsername, peerId: id });
-    });
+    if (!user || !pass) return msg.innerText = "Заполните все поля!";
+    if (type === 'register' && !isStrongPassword(pass)) {
+        return msg.innerText = "Слишком простой пароль!";
+    }
 
-    // Когда нам звонит зритель, отдаем ему свой поток
-    myPeer.on('call', call => {
-        if (myStream) {
-            call.answer(myStream);
-        }
-    });
+    socket.emit(type === 'login' ? 'login-account' : 'register-account', { username: user, password: pass });
 };
 
-// Функция для запуска стрима
-async function startStreaming() {
-    try {
-        // ЗАХВАТ ЭКРАНА + ГАЛОЧКА "ОБЩИЙ ДОСТУП К АУДИО"
-        myStream = await navigator.mediaDevices.getDisplayMedia({
-            video: true,
-            audio: true // ЭТО ДЛЯ ЗВУКА СИСТЕМЫ
-        });
-
-        // Добавляем микрофон, если нужно
-        try {
-            const mic = await navigator.mediaDevices.getUserMedia({ audio: true });
-            mic.getAudioTracks().forEach(track => myStream.addTrack(track));
-        } catch(e) { console.log("Микрофон не выбран"); }
-
-        const video = document.getElementById('remote-video');
-        video.srcObject = myStream;
-        video.muted = true; // Стример не должен слышать сам себя
-
-        socket.emit('stream-started', { peerId: myPeer.id, user: currentUsername });
-        addMessage("СИСТЕМА", "Вы в эфире!");
-    } catch (err) {
-        alert("Ошибка: " + err);
-    }
-}
-
-// Обновление списка стримов
-socket.on('update-stream-list', (streamers) => {
-    const list = document.getElementById('stream-list');
-    list.innerHTML = "";
-    
-    if (streamers.length === 0) {
-        list.innerHTML = '<p class="text-slate-500 text-sm italic">Активных стримов нет...</p>';
-    }
-
-    streamers.forEach(s => {
-        const btn = document.createElement('button');
-        btn.className = "w-full text-left p-3 bg-slate-800 rounded-xl hover:bg-indigo-600 transition mb-2 border border-slate-700";
-        btn.innerHTML = `<div class="font-bold text-white">${s.user}</div><div class="text-xs text-indigo-300">LIVE • Нажмите, чтобы смотреть</div>`;
-        btn.onclick = () => joinStream(s.peerId, s.user);
-        list.appendChild(btn);
-    });
+socket.on('auth-success', (data) => {
+    currentNick = data.username;
+    document.getElementById('auth-screen').classList.add('hidden');
+    document.getElementById('main-screen').classList.remove('hidden');
+    document.getElementById('my-nick').innerText = currentNick;
+    initPeer();
 });
 
-// Подключение к стриму
-function joinStream(peerId, name) {
-    console.log("Подключаюсь к", name);
-    document.getElementById('stream-title').innerText = "Стрим: " + name;
-    
-    // "Звоним" стримеру
-    const call = myPeer.call(peerId, null);
-    call.on('stream', remoteStream => {
-        const video = document.getElementById('remote-video');
-        video.srcObject = remoteStream;
-        // Важно: на многих браузерах звук не включится, пока пользователь не кликнет по видео
-        video.play(); 
-    });
+socket.on('auth-error', (e) => document.getElementById('auth-msg').innerText = e);
+
+function initPeer() {
+    myPeer = new Peer(undefined, { host: 'tatarstrim.onrender.com', port: 443, path: '/peerjs', secure: true });
+    myPeer.on('call', call => call.answer(myStream));
 }
 
-// Пароль и остальное
-window.askPassword = function() {
-    const p = prompt("Пароль:");
+// Стрим
+window.askPassword = () => {
+    const p = prompt("Введите мастер-пароль для стриминга:");
     socket.emit('start-stream-request', p);
 };
 
-socket.on('stream-auth-success', startStreaming);
+socket.on('stream-auth-ok', async () => {
+    try {
+        const quality = document.getElementById('quality').value;
+        const constraints = quality === 'high' ? { video: { width: 1920, height: 1080 } } : { video: { width: 854, height: 480 } };
+        
+        myStream = await navigator.mediaDevices.getDisplayMedia({ video: constraints, audio: true });
+        try {
+            const mic = await navigator.mediaDevices.getUserMedia({ audio: true });
+            mic.getAudioTracks().forEach(t => myStream.addTrack(t));
+        } catch(e) {}
 
-// Чат
-window.sendMessage = function() {
-    const input = document.getElementById('chat-input');
-    const msg = input.value.trim();
-    if (!msg) return;
-    if (msg.startsWith('/donate')) {
-        socket.emit('send-donation', { user: currentUsername, amount: msg.split(' ')[1] || "100" });
-    } else {
-        socket.emit('chat-message', { user: currentUsername, text: msg });
-    }
-    input.value = "";
-};
+        document.getElementById('main-video').srcObject = myStream;
+        socket.emit('stream-started', { peerId: myPeer.id, user: currentNick });
+    } catch (e) { alert("Ошибка захвата: " + e); }
+});
 
-socket.on('chat-message', d => addMessage(d.user, d.text));
+// Список и Поиск
+socket.on('update-stream-list', (list) => {
+    allStreams = list;
+    renderStreams(list);
+});
 
-function addMessage(u, t) {
-    const c = document.getElementById('chat');
-    c.innerHTML += `<div><b class="text-indigo-400">${u}:</b> ${t}</div>`;
-    c.scrollTop = c.scrollHeight;
+function renderStreams(list) {
+    const container = document.getElementById('stream-list');
+    container.innerHTML = list.map(s => `
+        <button onclick="joinStream('${s.peerId}', '${s.user}')" class="w-full text-left p-3 glass rounded-2xl hover:bg-indigo-600 transition group">
+            <div class="font-bold group-hover:text-white">${s.user}</div>
+            <div class="text-[10px] text-indigo-400 uppercase tracking-widest">Live Now</div>
+        </button>
+    `).join('') || '<p class="text-slate-600 text-sm italic">Никто не стримит...</p>';
 }
 
-socket.on('new-donation', d => {
-    const b = document.getElementById('donation-box');
-    document.getElementById('donation-text').innerText = `${d.user} задонатил ${d.amount} RUB!`;
-    b.classList.remove('hidden');
-    setTimeout(() => b.classList.add('hidden'), 5000);
+window.filterStreams = () => {
+    const query = document.getElementById('search-input').value.toLowerCase();
+    renderStreams(allStreams.filter(s => s.user.toLowerCase().includes(query)));
+};
+
+function joinStream(id, name) {
+    document.getElementById('current-stream-name').innerText = name;
+    const call = myPeer.call(id, null);
+    call.on('stream', rs => {
+        const v = document.getElementById('main-video');
+        v.srcObject = rs;
+        v.play();
+    });
+}
+
+// Чат и Алерт
+window.sendMsg = () => {
+    const i = document.getElementById('chat-msg');
+    if (i.value) {
+        socket.emit('chat-message', { user: currentNick, text: i.value });
+        i.value = "";
+    }
+};
+
+socket.on('chat-message', d => {
+    const chat = document.getElementById('chat');
+    chat.innerHTML += `<div><span class="text-indigo-400 font-bold">${d.user}:</span> <span class="text-slate-300">${d.text}</span></div>`;
+    chat.scrollTop = chat.scrollHeight;
+});
+
+window.sendFakeAction = (type) => {
+    if (type === 'donate') socket.emit('send-donation', { user: currentNick, amount: Math.floor(Math.random() * 1000) });
+    else socket.emit('send-sub', { user: currentNick });
+};
+
+socket.on('alert', d => {
+    const box = document.getElementById('alert-box');
+    box.classList.remove('hidden');
+    document.getElementById('alert-title').innerText = d.type === 'donation' ? 'НОВЫЙ ДОНАТ!' : 'НОВАЯ ПОДПИСКА!';
+    document.getElementById('alert-body').innerText = d.type === 'donation' ? `${d.user} прислал ${d.amount} руб.` : `${d.user} теперь с нами!`;
+    setTimeout(() => box.classList.add('hidden'), 4500);
 });
